@@ -6,6 +6,11 @@ use crate::syntax::SyntaxKind::{self, *};
 use crate::{ArgPattern, ArgShape, CommandSpec};
 use mitex_lexer::{BraceKind, CommandName, IfCommandName, Lexer, MacroEngine, Token, TokenStream};
 
+/// The most items that may enclose an item, matching TeX's 255 grouping
+/// levels. Deeper input is an error, which keeps the parser's recursion and
+/// the height of the tree it builds bounded.
+const MAX_NESTING: usize = 255;
+
 /// Stacked scope for parsing
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParseScope {
@@ -40,6 +45,10 @@ mod list_state {
         start: Option<Checkpoint>,
         /// The checkpoint of the last item in the list
         last: Option<Checkpoint>,
+        /// The height of the items after `start`
+        start_height: usize,
+        /// The height of the items after `last`
+        last_height: usize,
         /// The current scope
         pub scope: ParseScope,
     }
@@ -49,6 +58,8 @@ mod list_state {
             Self {
                 start: None,
                 last: None,
+                start_height: 0,
+                last_height: 0,
                 scope: ParseScope::Root,
             }
         }
@@ -75,6 +86,23 @@ mod list_state {
             self.last
         }
 
+        /// The height of the items a command wrapping the previous ones
+        /// would wrap
+        #[inline]
+        pub fn wrapped_height(&self) -> usize {
+            if self.last.is_some() {
+                self.last_height
+            } else {
+                self.start_height()
+            }
+        }
+
+        /// The height of the items after `start`
+        #[inline]
+        pub fn start_height(&self) -> usize {
+            self.start.map_or(0, |_| self.start_height)
+        }
+
         /// Take the start position of the list
         #[inline]
         pub fn take_start(&mut self) -> Option<Checkpoint> {
@@ -84,21 +112,31 @@ mod list_state {
         /// Store the start position of the list
         pub fn store_start(&mut self, current: Checkpoint) {
             self.start = Some(current);
+            self.start_height = 0;
         }
 
         /// Store the last position of the list
         pub fn store_last(&mut self, current: Checkpoint) {
             self.last = Some(current);
+            self.last_height = 0;
         }
 
         /// Store the last position of the list
         pub fn may_store_start(&mut self, current: Option<Checkpoint>) {
             self.start = current;
+            self.start_height = 0;
         }
 
         /// Store the last position of the list
         pub fn may_store_last(&mut self, current: Option<Checkpoint>) {
             self.last = current;
+            self.last_height = 0;
+        }
+
+        /// Record an item of the given height after `start` and `last`
+        pub fn grow(&mut self, height: usize) {
+            self.start_height = self.start_height.max(height);
+            self.last_height = self.last_height.max(height);
         }
     }
 }
@@ -122,6 +160,12 @@ pub struct Parser<'a, S: TokenStream<'a> = ()> {
     /// State used by item_list/argument_list parser
     /// The current state
     list_state: ListState,
+
+    /// The number of items enclosing the item being parsed
+    depth: usize,
+    /// The greatest height among the finished children of the item being
+    /// parsed
+    children_height: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -135,6 +179,8 @@ impl<'a> Parser<'a> {
             arg_matchers: ArgMatcherBuilder::default(),
             list_state: Default::default(),
             trivia_buffer: Vec::new(),
+            depth: 0,
+            children_height: 0,
         }
     }
 
@@ -148,6 +194,8 @@ impl<'a> Parser<'a> {
             arg_matchers: ArgMatcherBuilder::default(),
             list_state: Default::default(),
             trivia_buffer: Vec::new(),
+            depth: 0,
+            children_height: 0,
         }
     }
 }
@@ -317,13 +365,14 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
         self.list_state.store_start(current);
 
         while self.peek().is_some_and(|kind| !self.stop_by_scope(kind)) {
-            let attachable = self.content(true);
+            let (attachable, height) = self.content(true);
 
             // If the item is not attachable, then we should
             // not update the `list_last` state
             if attachable {
                 self.list_state.store_last(current);
             }
+            self.list_state.grow(height);
             current = self.builder.checkpoint();
         }
 
@@ -366,11 +415,25 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
     /// If `not_prefer_single_char` is false, then the parser will try to parse
     /// the item as a single character if possible
     ///
-    /// Returns whether the item is attachable
-    fn content(&mut self, not_prefer_single_char: bool) -> bool {
+    /// Returns whether the item is attachable, and its height
+    fn content(&mut self, not_prefer_single_char: bool) -> (bool, usize) {
         let Some(c) = self.peek() else {
-            return true;
+            return (true, 0);
         };
+        if self.depth > MAX_NESTING {
+            return self.measure(|this| {
+                this.error_item();
+                false
+            });
+        }
+        self.depth += 1;
+        let res = self.measure(|this| this.content_item(c, not_prefer_single_char));
+        self.depth -= 1;
+        res
+    }
+
+    /// Parse the item starting with `c`, see [`Self::content`]
+    fn content_item(&mut self, c: Token, not_prefer_single_char: bool) -> bool {
         match c {
             Token::Ampersand
             | Token::NewLine
@@ -452,6 +515,33 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
         true
     }
 
+    /// Run `f`, returning its result and the height of the items it parsed
+    fn measure<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> (T, usize) {
+        let parent = std::mem::take(&mut self.children_height);
+        let res = f(self);
+        let height = self.children_height + 1;
+        self.children_height = parent.max(height);
+        (res, height)
+    }
+
+    /// Whether the item being parsed may wrap previous items of the given
+    /// height without nesting deeper than [`MAX_NESTING`], which then count
+    /// as its children
+    fn may_wrap(&mut self, height: usize) -> bool {
+        if self.depth - 1 + height > MAX_NESTING {
+            return false;
+        }
+        self.children_height = self.children_height.max(height);
+        true
+    }
+
+    /// Consume the next token as an error
+    fn error_item(&mut self) {
+        self.builder.start_node(TokenError.into());
+        self.eat();
+        self.builder.finish_node();
+    }
+
     /// Item parsers
     /// Parse a text item
     fn text(&mut self) {
@@ -498,6 +588,10 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
                 return true;
             }
             Some(ArgShape::Left1) => {
+                if !self.may_wrap(self.list_state.wrapped_height()) {
+                    self.error_item();
+                    return false;
+                }
                 // Wrap previous item
                 self.start_command_at(self.list_last().or(self.list_start()));
                 self.eat();
@@ -509,6 +603,11 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
                 pattern
             }
             Some(ArgShape::InfixGreedy) => {
+                let height = self.list_state.start_height();
+                if !self.may_wrap(height) {
+                    self.error_item();
+                    return false;
+                }
                 // Wrap all previous items in the scope of list
                 let pos = self.list_state.take_start();
                 self.start_command_at(pos);
@@ -716,6 +815,7 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
                         arg::<GREEDY, _, _>(self, |this| {
                             this.builder.token(TokenWord.into(), &c.to_string())
                         });
+                        self.list_state.grow(1);
                     }
 
                     if !k_wrap_args!() {
@@ -747,17 +847,20 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
                         // Otherwise, whether it is right does not matter
                         current = Some(self.builder.checkpoint());
                     }
-                    arg::<GREEDY, _, _>(self, |this| {
-                        if modified_as_term {
-                            this.eat();
-                        } else {
-                            this.item_group(scope);
-                        }
+                    let ((), height) = self.measure(|this| {
+                        arg::<GREEDY, _, _>(this, |this| {
+                            if modified_as_term {
+                                this.eat();
+                            } else {
+                                this.item_group(scope);
+                            }
+                        })
                     });
 
                     if !k_wrap_args!() {
                         self.list_state.may_store_last(current);
                     }
+                    self.list_state.grow(height);
                 }
                 // rest of any item
                 kind => {
@@ -770,10 +873,11 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
                         // Otherwise, whether it is right does not matter
                         current = Some(self.builder.checkpoint());
                     }
-                    let attachable = arg::<GREEDY, _, _>(self, |this| this.content(true));
+                    let (attachable, height) = arg::<GREEDY, _, _>(self, |this| this.content(true));
                     if !k_wrap_args!() && attachable {
                         self.list_state.may_store_last(current);
                     }
+                    self.list_state.grow(height);
                 }
             }
         }
@@ -782,21 +886,23 @@ impl<'a, S: TokenStream<'a>> Parser<'a, S> {
     #[inline]
     fn match_arguments<const GREEDY: bool>(&mut self, searcher: ArgMatcher) {
         self.list_state.may_store_last(None);
-        let last = self.list_last();
-        let start = self.list_start();
+        let parent_state = self.list_state;
         self.list_state
             .may_store_start(GREEDY.then(|| self.builder.checkpoint()));
 
         self.match_arguments_::<GREEDY>(searcher);
 
-        self.list_state.may_store_start(start);
-        self.list_state.may_store_last(last);
+        self.list_state = parent_state;
     }
 
     /// Clause parsers
     /// Parse a component
     fn attach_component(&mut self, has_script: bool) {
         if let Some(list_last) = self.list_last() {
+            if !self.may_wrap(self.list_state.wrapped_height()) {
+                self.error_item();
+                return;
+            }
             self.builder
                 .start_node_at(list_last, ItemAttachComponent.into());
             self.builder.start_node_at(list_last, ClauseArgument.into());
