@@ -14,3 +14,20 @@ pub static DEFAULT_SPEC: once_cell::sync::Lazy<CommandSpec> = once_cell::sync::L
         "/mitex-artifacts/spec/default.rkyv"
     )))
 });
+
+/// The Typst definitions converted math calls into, by path under the
+/// package's `specs/`; `mod.typ` exports them as `mitex-scope`.
+pub const TYPST_SPECS: &[(&str, &str)] = &[
+    (
+        "mod.typ",
+        include_str!("../../../packages/mitex/specs/mod.typ"),
+    ),
+    (
+        "prelude.typ",
+        include_str!("../../../packages/mitex/specs/prelude.typ"),
+    ),
+    (
+        "latex/standard.typ",
+        include_str!("../../../packages/mitex/specs/latex/standard.typ"),
+    ),
+];
