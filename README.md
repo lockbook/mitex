@@ -1,3 +1,5 @@
+> **Lockbook's fork.** Upstream main plus fixes pending upstream (mitex-rs/mitex#230, #231, #232 and #226), with the spec snapshot fetched from [lockbook/mitex-artifacts](https://github.com/lockbook/mitex-artifacts) until mitex-rs/artifacts#1 merges. Once those land and are released, [Lockbook](https://github.com/lockbook/lockbook) can depend on upstream and this fork can go.
+
 # [MiTeX](https://github.com/mitex-rs/mitex)
 
 **[LaTeX](https://www.latex-project.org/) support for [Typst](https://typst.app/), powered by [Rust](https://www.rust-lang.org/) and [WASM](https://webassembly.org/).**
