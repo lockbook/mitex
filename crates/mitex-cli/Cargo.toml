@@ -21,6 +21,9 @@ doc = false
 [dependencies]
 
 mitex-spec-gen.workspace = true
+# rkyv is off by default so that crates depending on mitex do not pull it in.
+# The CLI reads and writes rkyv spec files, so it turns the feature on.
+# Lockbook does not build this crate, so rkyv stays out of Lockbook.
 mitex-spec = { workspace = true, features = ["rkyv"] }
 mitex-parser.workspace = true
 mitex.workspace = true
