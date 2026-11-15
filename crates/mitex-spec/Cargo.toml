@@ -22,7 +22,7 @@ rustc-hash.workspace = true
 
 rkyv = ["dep:rkyv", "rkyv/alloc", "rkyv/archive_le"]
 rkyv-validation = ["dep:rkyv", "rkyv/validation"]
-default = ["serde", "rkyv", "rkyv-validation"]
+default = ["serde"]
 
 [dev-dependencies]
 once_cell.workspace = true

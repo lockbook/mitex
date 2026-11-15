@@ -19,6 +19,7 @@ use rkyv::{Archive, Deserialize as rDeser, Serialize as rSer};
 
 pub mod preludes;
 pub mod query;
+#[cfg(feature = "rkyv")]
 mod stream;
 pub use query::CommandSpecRepr as JsonCommandSpec;
 
