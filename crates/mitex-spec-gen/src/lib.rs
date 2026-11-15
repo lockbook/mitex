@@ -1,6 +1,6 @@
 //! Provides embedded command specifications for MiTeX.
 
-use mitex_spec::CommandSpec;
+use mitex_spec::{CommandSpec, JsonCommandSpec};
 
 /// The default command specification.
 ///
@@ -9,10 +9,12 @@ use mitex_spec::CommandSpec;
 ///
 /// [repro-default]: https://github.com/mitex-rs/artifacts/blob/main/README.md#default-command-specification-since-v011
 pub static DEFAULT_SPEC: once_cell::sync::Lazy<CommandSpec> = once_cell::sync::Lazy::new(|| {
-    CommandSpec::from_bytes(include_bytes!(concat!(
+    let json: JsonCommandSpec = serde_json::from_slice(include_bytes!(concat!(
         env!("OUT_DIR"),
-        "/mitex-artifacts/spec/default.rkyv"
+        "/mitex-artifacts/spec/default.json"
     )))
+    .expect("the default spec is valid JSON");
+    json.into()
 });
 
 /// The Typst definitions converted math calls into, by path under the

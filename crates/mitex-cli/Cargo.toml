@@ -21,7 +21,7 @@ doc = false
 [dependencies]
 
 mitex-spec-gen.workspace = true
-mitex-spec.workspace = true
+mitex-spec = { workspace = true, features = ["rkyv"] }
 mitex-parser.workspace = true
 mitex.workspace = true
 

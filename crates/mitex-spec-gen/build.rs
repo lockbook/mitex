@@ -45,9 +45,9 @@ fn copy_prebuilt() -> anyhow::Result<()> {
         std::env::var("CARGO_MANIFEST_DIR").with_context(|| "failed to get manifest dir")?;
     let manifest_dir = std::path::Path::new(&manifest_dir);
     let target_spec =
-        Path::new(&std::env::var("OUT_DIR").unwrap()).join("mitex-artifacts/spec/default.rkyv");
+        Path::new(&std::env::var("OUT_DIR").unwrap()).join("mitex-artifacts/spec/default.json");
 
-    // assets/artifacts/spec/default.rkyv
+    // assets/artifacts/spec/default.json
     std::fs::create_dir_all(
         target_spec
             .parent()
@@ -55,7 +55,7 @@ fn copy_prebuilt() -> anyhow::Result<()> {
     )
     .with_context(|| "failed to create target_dir for store spec")?;
 
-    let prebuilt_spec = manifest_dir.join(Path::new("assets/artifacts/spec/default.rkyv"));
+    let prebuilt_spec = manifest_dir.join(Path::new("assets/artifacts/spec/default.json"));
     println!("cargo:warning=Use prebuilt spec binaries at {prebuilt_spec:?}");
 
     std::fs::copy(prebuilt_spec, target_spec).with_context(|| {
@@ -138,11 +138,6 @@ fn generate() -> anyhow::Result<()> {
             .with_context(|| "failed to serialize json spec")?,
     )
     .with_context(|| "failed to write json spec")?;
-
-    let spec: mitex_spec::CommandSpec = json_spec.into();
-
-    std::fs::write(target_dir.join("spec/default.rkyv"), spec.to_bytes())
-        .with_context(|| "failed to write compacted spec")?;
 
     Ok(())
 }
